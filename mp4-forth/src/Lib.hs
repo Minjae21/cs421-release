@@ -1,3 +1,4 @@
+--- ChatGPT was used for debugging purpose
 --- Given Library Code
 --- ==================
 
@@ -98,7 +99,9 @@ liftIntOp _  _        = Nothing
 --- ### `liftCompOp`
 
 liftCompOp :: (Integer -> Integer -> Bool) -> IStack -> Maybe IStack
-liftCompOp = undefined
+liftCompOp op (x:y:xs) =
+    Just $ (if y `op` x then -1 else 0) : xs
+liftCompOp _ _ = Nothing
 
 
 --- The Dictionary
@@ -123,34 +126,54 @@ initCompileOp = [ (":",    Define)
 
 initArith :: Dictionary
 initArith = [ ("+",  Prim $ liftIStackOp $ liftIntOp (+))
+            , ("-",  Prim $ liftIStackOp $ liftIntOp (-))
+            , ("*",  Prim $ liftIStackOp $ liftIntOp (*))
+            , ("/",  Prim $ liftIStackOp $ liftIntOp div) 
             ]
 
 --- ### Comparison Operators
 
 initComp :: Dictionary
-initComp = []
+initComp =
+  [ ("<",  Prim $ liftIStackOp $ liftCompOp (<))
+  , (">",  Prim $ liftIStackOp $ liftCompOp (>))
+  , ("=",  Prim $ liftIStackOp $ liftCompOp (==))
+  , ("<=", Prim $ liftIStackOp $ liftCompOp (<=))
+  , (">=", Prim $ liftIStackOp $ liftCompOp (>=))
+  , ("!=", Prim $ liftIStackOp $ liftCompOp (/=))
+  ]
 
 --- ### Stack Manipulations
 
 initIStackOp :: Dictionary
-initIStackOp = [ ("dup",  Prim $ liftIStackOp istackDup)
-               ]
+initIStackOp =
+  [ ("dup",  Prim $ liftIStackOp istackDup)
+  , ("swap", Prim $ liftIStackOp istackSwap)
+  , ("drop", Prim $ liftIStackOp istackDrop)
+  , ("rot",  Prim $ liftIStackOp istackRot)
+  ]
 
-initPrintOp = [ (".",  Prim printPop)
-              ]
+initPrintOp =
+  [ (".",  Prim printPop)
+  , (".s", Prim printStack)
+  , (".S", Prim printStack)
+  ]
 
 istackDup :: IStack -> Maybe IStack
 istackDup (i:is) = Just $ i:i:is
 istackDup _      = Nothing
 
 istackSwap :: IStack -> Maybe IStack
-istackSwap = undefined
+istackSwap (x:y:xs) = Just (y:x:xs)
+istackSwap _        = Nothing
 
 istackDrop :: IStack -> Maybe IStack
-istackDrop = undefined
+istackDrop (_:xs) = Just xs
+istackDrop _      = Nothing
 
 istackRot :: IStack -> Maybe IStack
-istackRot = undefined
+istackRot (x:y:z:xs) = Just (z:x:y:xs)
+istackRot _          = Nothing
 
 --- ### Popping the Stack
 
@@ -162,7 +185,8 @@ printPop _ = underflow
 --- ### Printing the Stack
 
 printStack :: ForthState -> ForthState
-printStack (istack, dict, out) = undefined
+printStack (istack, dict, out) =
+    (istack, dict, unwords (map show (reverse istack)) : out)
 
 --- Evaluator
 --- ---------
@@ -197,7 +221,7 @@ transForLoop kloop (i:is, d, o) =
         (is, d, o)
     else
         (aux kloop i) (is, d, o)
-        where aux k 0 = k
+        where aux k 0 = id
               aux k n = k . (aux k (n-1))
 transForLoop _ _ = underflow
 
@@ -213,15 +237,36 @@ cstackNext _ = Nothing
 --- ### Conditionals
 
 cstackIf :: CStack -> Maybe CStack
-cstackIf cstack = undefined
+cstackIf cstack = Just (("if", id) : cstack)
 
 cstackElse :: CStack -> Maybe CStack
-cstackElse cstack@(("if", _):_) = undefined
+cstackElse (("if", kif):(c, kold):cs) =
+    Just (("else", id):("if", kif):(c, kold):cs)
 cstackElse _ = Nothing
 
 cstackThen :: CStack -> Maybe CStack
-cstackThen (("else", kelse):("if", kif):(c, kold):cstack) = undefined
-cstackThen (("if", kif):(c, kold):cstack) = undefined
+cstackThen (("else", kelse):("if", kif):(c, kold):cs) =
+    Just ((c, knew):cs)
+  where
+    knew state =
+        case kold state of
+            (i:is, d, o) ->
+                if i /= 0
+                then kif (is, d, o)
+                else kelse (is, d, o)
+            _ -> underflow
+
+cstackThen (("if", kif):(c, kold):cs) =
+    Just ((c, knew):cs)
+  where
+    knew state =
+        case kold state of
+            (i:is, d, o) ->
+                if i /= 0
+                then kif (is, d, o)
+                else (is, d, o)
+            _ -> underflow
+
 cstackThen _ = Nothing
 
 --- ### Indefinite Loops
@@ -230,9 +275,19 @@ cstackBegin :: CStack -> Maybe CStack
 cstackBegin cstack = Just $ ("begin", id):cstack
 
 cstackUntil :: CStack -> Maybe CStack
-cstackUntil (("begin", kloop):(c, kold):cstack) = undefined
-cstackUntil _ = Nothing
+cstackUntil (("begin", kloop):(c, kold):cs) =
+    Just ((c, knew):cs)
+  where
+    knew state = loopLogic (kold state) 
+    
+    loopLogic state' =
+        case kloop state' of
+            (i:is, d, o) -> if i /= 0 
+                            then (is, d, o) 
+                            else loopLogic (is, d, o)
+            _            -> underflow
 
+cstackUntil _ = Nothing
 
 --- ### Lookup in dictionary
 
